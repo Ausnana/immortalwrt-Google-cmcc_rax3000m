@@ -150,43 +150,46 @@ jobs:
       - name: 生成 README 说明
         run: |
           cat << EOF > README.md
-# OpenWrt RAX3000M 固件
-
-- **版本**: ${{ env.FIRMWARE_VERSION }}
-- **设备**: RAX3000M
-- **5G 25dB**: ${{ env.ENABLE_5G_25DB }}
-- **构建时间**: $(date +"%Y-%m-%d %H:%M %Z")
-- **默认地址**: 192.168.6.1 (密码为空)
-
-## 安装说明
-1. 备份配置
-2. 通过 Web 界面上传固件
-3. 重启设备
-
-## 注意
-第三方固件，自行风险。支持: https://github.com/padavanonly/immortalwrt-mt798x-6.6
-EOF
+          # OpenWrt RAX3000M 固件
+          
+          - **版本**: ${{ env.FIRMWARE_VERSION }}
+          - **设备**: RAX3000M
+          - **5G 25dB**: ${{ env.ENABLE_5G_25DB }}
+          - **构建时间**: $(date +"%Y-%m-%d %H:%M %Z")
+          - **默认地址**: 192.168.6.1 (密码为空)
+          
+          ## 安装说明
+          1. 备份配置
+          2. 通过 Web 界面上传固件
+          3. 重启设备
+          
+          ## 注意
+          第三方固件，自行风险。支持: https://github.com/padavanonly/immortalwrt-mt798x-6.6
+          EOF
 
       - name: 生成发布描述
         run: |
           cat << EOF > release.txt
-# OpenWrt RAX3000M 固件发布
-
-- **版本**: ${{ env.FIRMWARE_VERSION }}
-- **设备**: RAX3000M
-- **5G 25dB**: ${{ env.ENABLE_5G_25DB }}
-- **时间**: $(date +"%Y-%m-%d %H:%M %Z")
-- **默认地址**: 192.168.6.1 (密码为空)
-
-## 安装
-1. 备份配置
-2. 通过 Web 界面上传固件
-3. 重启设备
-
-## 特性
-- ✅ 优化网络性能，支持 USB 共享、HNAT 加速、Ksmbd 共享
-${{ env.ENABLE_5G_25DB == 'true' && '- ✅ 5G 25dB 高功率模式' || '' }}
-EOF
+          # OpenWrt RAX3000M 固件发布
+          
+          - **版本**: ${{ env.FIRMWARE_VERSION }}
+          - **设备**: RAX3000M
+          - **5G 25dB**: ${{ env.ENABLE_5G_25DB }}
+          - **时间**: $(date +"%Y-%m-%d %H:%M %Z")
+          - **默认地址**: 192.168.6.1 (密码为空)
+          
+          ## 安装
+          1. 备份配置
+          2. 通过 Web 界面上传固件
+          3. 重启设备
+          
+          ## 特性
+          - ✅ 优化网络性能，支持 USB 共享、HNAT 加速、Ksmbd 共享
+          EOF
+          
+          if [ "${{ env.ENABLE_5G_25DB }}" == "true" ]; then
+            echo "- ✅ 5G 25dB 高功率模式" >> release.txt
+          fi
 
       - name: 整理固件文件
         id: organize
