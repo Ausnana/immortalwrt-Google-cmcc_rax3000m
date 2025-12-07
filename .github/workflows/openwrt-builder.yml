@@ -16,7 +16,7 @@ on:
   repository_dispatch:
   workflow_dispatch:
 
-# 🔥🔥🔥【新增】修复发布时的 403 权限错误 🔥🔥🔥
+# 修复发布时的 403 权限错误
 permissions:
   contents: write
 
@@ -48,6 +48,11 @@ jobs:
         # 清理不必要的组件，为编译腾出磁盘空间
         sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
         sudo docker image prune --all --force
+        
+        # 国内镜像加速 - 替换Ubuntu源为阿里云
+        sudo sed -i "s@http://.*archive.ubuntu.com@https://mirrors.aliyun.com@g" /etc/apt/sources.list
+        sudo sed -i "s@http://.*security.ubuntu.com@https://mirrors.aliyun.com@g" /etc/apt/sources.list
+        
         sudo -E apt-get -qq update
         sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
         sudo -E apt-get -qq autoremove --purge
@@ -60,9 +65,16 @@ jobs:
       working-directory: /workdir
       run: |
         df -hT $PWD
-        # 使用 Hanwckf 的源码克隆
-        git clone $REPO_URL -b $REPO_BRANCH openwrt
+        # 使用国内镜像加速克隆
+        git clone --depth 1 $REPO_URL -b $REPO_BRANCH openwrt
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+        
+        # 国内镜像加速 - 替换OpenWrt源码仓库为国内镜像
+        cd openwrt
+        sed -i 's#https://git.openwrt.org#https://mirror.iscas.ac.cn/git/openwrt#g' .gitmodules
+        sed -i 's#https://github.com/openwrt#https://github.com.cnpmjs.org/openwrt#g' .gitmodules
+        git submodule sync
+        git submodule update --init --recursive
 
     - name: 加载自定义 Feeds (Load custom feeds)
       run: |
@@ -70,6 +82,10 @@ jobs:
         chmod +x $DIY_P1_SH
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P1_SH
+        
+        # 国内镜像加速 - 替换feeds源为国内镜像
+        sed -i 's#https://git.openwrt.org/feed#https://mirror.iscas.ac.cn/git/openwrt/feed#g' feeds.conf.default
+        sed -i 's#https://github.com/openwrt/feed#https://github.com.cnpmjs.org/openwrt/feed#g' feeds.conf.default
 
     - name: 更新 Feeds (Update feeds)
       run: cd openwrt && ./scripts/feeds update -a
@@ -84,8 +100,29 @@ jobs:
         chmod +x $DIY_P2_SH
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
+        
+        # 添加5G 25dB功率修改
+        echo "修改5G无线功率为25dB"
+        mkdir -p files/etc/config
+        cat > files/etc/config/wireless << EOF
+        config wifi-device 'radio0'
+            option type 'mac80211'
+            option channel '36'
+            option hwmode '11a'
+            option path 'pci0000:00/0000:00:00.0'
+            option htmode 'VHT80'
+            option country 'CN'
+            option txpower '25'  # 设置5G发射功率为25dB
+        
+        config wifi-iface 'default_radio0'
+            option device 'radio0'
+            option network 'lan'
+            option mode 'ap'
+            option ssid 'OpenWrt-5G'
+            option encryption 'psk2'
+            option key 'password'
+        EOF
 
-    # 🔥🔥🔥【新增】缓存加速步骤 🔥🔥🔥
     - name: 缓存加速 (Cache)
       uses: actions/cache@v4
       with:
@@ -101,7 +138,12 @@ jobs:
       run: |
         cd openwrt
         make defconfig
+        # 国内镜像加速 - 设置下载代理
+        export http_proxy=https://ghproxy.com/
+        export https_proxy=https://ghproxy.com/
         make download -j8
+        unset http_proxy
+        unset https_proxy
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
 
@@ -110,17 +152,29 @@ jobs:
       run: |
         cd openwrt
         
-        # 🔥🔥🔥【新增】启用 CCACHE 加速编译
+        # 启用 CCACHE 加速编译
         echo "CONFIG_CCACHE=y" >> .config
         # 设置 ccache 目录到当前工作区，以便被缓存插件捕获
         export CCACHE_DIR=$(pwd)/.ccache
         
         echo -e "$(nproc) thread compile"
-        make -j$(nproc) || make -j1 || make -j1 V=s
-        echo "status=success" >> $GITHUB_OUTPUT
+        # 捕获编译错误输出到日志文件
+        make -j$(nproc) || make -j1 || make -j1 V=s > compile_error.log 2>&1
+        if [ -f "compile_error.log" ]; then
+            echo "status=failure" >> $GITHUB_OUTPUT
+        else
+            echo "status=success" >> $GITHUB_OUTPUT
+        fi
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+
+    - name: 上传编译失败日志
+      uses: actions/upload-artifact@main
+      if: steps.compile.outputs.status == 'failure'
+      with:
+        name: compile-error-log${{ env.FILE_DATE }}
+        path: openwrt/compile_error.log
 
     - name: 检查磁盘空间 (Check space usage)
       if: (!cancelled())
@@ -155,7 +209,6 @@ jobs:
       run: |
         echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
         touch release.txt
-        # 注意：原脚本这里的判断逻辑可能存在变量未定义的风险，已保留原样，若 gofile 步骤不存在则此处仅生成空文件
         [ ${UPLOAD_GOFILE} = true ] && [ -n "${{ steps.gofile.outputs.url }}" ] && echo "🔗 [GoFile](${{ steps.gofile.outputs.url }})" >> release.txt
         echo "status=success" >> $GITHUB_OUTPUT
 
