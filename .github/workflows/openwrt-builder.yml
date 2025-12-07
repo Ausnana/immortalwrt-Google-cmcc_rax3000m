@@ -17,8 +17,10 @@ on:
   workflow_dispatch:
 
 env:
-  REPO_URL: https://github.com/coolsnowwolf/lede
-  REPO_BRANCH: master
+  # === 修改为 Hanwckf (H大) 源码和分支 ===
+  REPO_URL: https://github.com/hanwckf/immortalwrt-mt798x
+  REPO_BRANCH: openwrt-21.02
+  # =======================================
   FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: .config
   DIY_P1_SH: diy-part1.sh
@@ -40,6 +42,7 @@ jobs:
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
+        # 清理不必要的组件，为编译腾出磁盘空间
         sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
         sudo docker image prune --all --force
         sudo -E apt-get -qq update
@@ -54,6 +57,7 @@ jobs:
       working-directory: /workdir
       run: |
         df -hT $PWD
+        # 使用 Hanwckf 的源码克隆
         git clone $REPO_URL -b $REPO_BRANCH openwrt
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
