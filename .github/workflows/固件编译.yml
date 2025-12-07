@@ -221,6 +221,6 @@ EOF
         uses: Mattraks/delete-workflow-runs@main
         with:
           retain_days: 0
-          keep-minimum-runs: 2  # ✅ 修正：带连字符的参数名
+          keep-minimum-runs: 2  # ✅ 修正：注释已移除，仅保留参数
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
