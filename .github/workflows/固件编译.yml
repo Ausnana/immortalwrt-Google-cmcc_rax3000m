@@ -21,15 +21,14 @@ on:
         type: boolean
         default: true
 
-# 🔥🔥🔥【新增】修复发布时的 403 权限错误 🔥🔥🔥
 permissions:
   contents: write
 
 env:
   REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-6.6
   REPO_BRANCH: openwrt-24.10-6.6
-  DEVICE_NAME: rax3000m  # 仅编译 RAX3000M
-  ENABLE_5G_25DB: ${{ github.event.inputs.enable_5g_25db || true }}  # 5G 25dB 开关
+  DEVICE_NAME: rax3000m
+  ENABLE_5G_25DB: ${{ github.event.inputs.enable_5g_25db || 'true' }}
   FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: .config
   DIY_P1_SH: diy-part1.sh
@@ -44,13 +43,12 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: 检出代码 (Checkout)
-        uses: actions/checkout@main
+        uses: actions/checkout@v4
 
       - name: 初始化编译环境 (Initialization environment)
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          # 清理不必要的组件，为编译腾出磁盘空间
           sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo docker image prune --all --force
           sudo -E apt-get -qq update
@@ -89,22 +87,30 @@ jobs:
           cd openwrt
           $GITHUB_WORKSPACE/$DIY_P2_SH
 
-      # 🔥🔥🔥【新增】5G 25dB 精确修改（智能开关 + 校验）🔥🔥🔥
+      # 🔥🔥🔥【修正】增加 cd openwrt 确保路径正确 🔥🔥🔥
       - name: 修改 5G 25dB
         if: env.ENABLE_5G_25DB == 'true'
         run: |
+          cd openwrt
           EEPROM_FILE=package/mtk/drivers/mt_wifi/files/mt7981-default-eeprom/MT7981_iPAiLNA_EEPROM.bin
-          EXPECTED_CONTENT=$(printf '\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B')
-          mkdir -p "$(dirname "$EEPROM_FILE")" && touch "$EEPROM_FILE" && chmod 644 "$EEPROM_FILE"
-          CURRENT_CONTENT=$(dd if="$EEPROM_FILE" bs=1 skip=$((0x445)) count=20 2>/dev/null || echo "")
-          if [ "$CURRENT_CONTENT" != "$EXPECTED_CONTENT" ]; then
-            echo "✅ 启用 5G 25dB 修改（跳过重复修改）"
-            printf '\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B' | dd of="$EEPROM_FILE" bs=1 seek=$((0x445)) conv=notrunc
-          else
-            echo "ℹ️ 5G 25dB 已启用，无需修改"
+          
+          if [ ! -f "$EEPROM_FILE" ]; then
+            echo "⚠️ 警告：找不到 EEPROM 文件：$EEPROM_FILE"
+            echo "跳过 5G 25dB 修改。"
+            exit 0
           fi
 
-      # 🔥🔥🔥【新增】缓存加速步骤 🔥🔥🔥
+          EXPECTED_CONTENT=$(printf '\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B')
+          # 读取当前值 (从 0x445 开始读取 20 字节)
+          CURRENT_CONTENT=$(dd if="$EEPROM_FILE" bs=1 skip=$((0x445)) count=20 2>/dev/null)
+          
+          if [ "$CURRENT_CONTENT" != "$EXPECTED_CONTENT" ]; then
+            echo "✅ 正在应用 5G 25dB 修改..."
+            printf '\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B' | dd of="$EEPROM_FILE" bs=1 seek=$((0x445)) conv=notrunc
+          else
+            echo "ℹ️ 5G 25dB 已经修改过，无需重复操作"
+          fi
+
       - name: 缓存加速 (Cache)
         uses: actions/cache@v4
         with:
@@ -129,7 +135,7 @@ jobs:
         run: |
           cd openwrt
           
-          # 🔥🔥🔥【新增】启用 CCACHE 加速编译
+          # 启用 CCACHE 加速编译
           echo "CONFIG_CCACHE=y" >> .config
           export CCACHE_DIR=$(pwd)/.ccache
           
@@ -137,10 +143,9 @@ jobs:
           make -j$(nproc) || make -j1 || make -j1 V=s
           echo "status=success" >> $GITHUB_OUTPUT
           
-          # 🔥🔥🔥【新增】提取版本号（用于命名和发布）🔥🔥🔥
+          # 提取版本号
           VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "commit-$(git rev-parse --short HEAD)")
           echo "FIRMWARE_VERSION=$VERSION" >> $GITHUB_ENV
-          echo "DEVICE_NAME=rax3000m" >> $GITHUB_ENV
 
       - name: 生成 README 说明
         run: |
@@ -180,7 +185,7 @@ EOF
 
 ## 特性
 - ✅ 优化网络性能，支持 USB 共享、HNAT 加速、Ksmbd 共享
-- ${{ env.ENABLE_5G_25DB == 'true' && '- ✅ 5G 25dB 高功率模式' || '' }}
+${{ env.ENABLE_5G_25DB == 'true' && '- ✅ 5G 25dB 高功率模式' || '' }}
 EOF
 
       - name: 整理固件文件
@@ -192,7 +197,7 @@ EOF
           echo "status=success" >> $GITHUB_OUTPUT
 
       - name: 上传固件目录
-        uses: actions/upload-artifact@main
+        uses: actions/upload-artifact@v4
         if: steps.organize.outputs.status == 'success'
         with:
           name: OpenWrt_firmware_${{ env.FIRMWARE_VERSION }}_${{ env.DEVICE_NAME }}
@@ -218,9 +223,9 @@ EOF
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 删除旧的 Workflow 运行记录
-        uses: Mattraks/delete-workflow-runs@main
+        uses: Mattraks/delete-workflow-runs@v2
         with:
           retain_days: 0
-          keep-minimum-runs: 2  # ✅ 修正：注释已移除，仅保留参数
+          keep-minimum-runs: 2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
