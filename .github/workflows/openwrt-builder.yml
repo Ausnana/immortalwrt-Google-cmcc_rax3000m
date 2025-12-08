@@ -87,7 +87,6 @@ jobs:
           cd openwrt
           $GITHUB_WORKSPACE/$DIY_P2_SH
 
-      # 🔥🔥🔥【修正】增加 cd openwrt 确保路径正确 🔥🔥🔥
       - name: 修改 5G 25dB
         if: env.ENABLE_5G_25DB == 'true'
         run: |
@@ -111,15 +110,16 @@ jobs:
             echo "ℹ️ 5G 25dB 已经修改过，无需重复操作"
           fi
 
+      # 🔥🔥🔥【刷新】缓存 Key 已更新为 reset-cache-v1 🔥🔥🔥
       - name: 缓存加速 (Cache)
         uses: actions/cache@v4
         with:
           path: |
             openwrt/dl
             openwrt/.ccache
-          key: ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-${{ hashFiles('openwrt/.config') }}
+          key: ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-reset-cache-v1-${{ hashFiles('openwrt/.config') }}
           restore-keys: |
-            ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-
+            ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-reset-cache-v1-
 
       - name: 下载软件包 (Download package)
         id: package
