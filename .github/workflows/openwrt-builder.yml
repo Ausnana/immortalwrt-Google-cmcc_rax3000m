@@ -110,16 +110,16 @@ jobs:
             echo "ℹ️ 5G 25dB 已经修改过，无需重复操作"
           fi
 
-      # 🔥🔥🔥【刷新】缓存 Key 已更新为 reset-cache-v2 🔥🔥🔥
+      # 🔥🔥🔥【刷新】修改 Key 为 reset-cache-v3 🔥🔥🔥
       - name: 缓存加速 (Cache)
         uses: actions/cache@v4
         with:
           path: |
             openwrt/dl
             openwrt/.ccache
-          key: ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-reset-cache-v2-${{ hashFiles('openwrt/.config') }}
+          key: ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-reset-cache-v3-${{ hashFiles('openwrt/.config') }}
           restore-keys: |
-            ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-reset-cache-v2-
+            ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-reset-cache-v3-
 
       - name: 下载软件包 (Download package)
         id: package
