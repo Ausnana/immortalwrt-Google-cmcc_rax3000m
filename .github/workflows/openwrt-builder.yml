@@ -30,7 +30,6 @@ env:
   DEVICE_NAME: rax3000m
   ENABLE_5G_25DB: ${{ github.event.inputs.enable_5g_25db || 'true' }}
   FEEDS_CONF: feeds.conf.default
-  CONFIG_FILE: .config
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
   UPLOAD_BIN_DIR: false
@@ -79,13 +78,76 @@ jobs:
       - name: 安装 Feeds (Install feeds)
         run: cd openwrt && ./scripts/feeds install -a
 
-      - name: 加载自定义配置 (Load custom configuration)
+      # 🔥🔥🔥【重点】动态生成配置，不再依赖静态 .config 🔥🔥🔥
+      - name: 生成配置文件 (Generate Configuration)
         run: |
-          [ -e files ] && mv files openwrt/files
-          [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
-          chmod +x $DIY_P2_SH
           cd openwrt
-          $GITHUB_WORKSPACE/$DIY_P2_SH
+          # 1. 先生成 RAX3000M 的默认配置 (确保基础驱动正确)
+          touch .config
+          echo "CONFIG_TARGET_mediatek=y" >> .config
+          echo "CONFIG_TARGET_mediatek_filogic=y" >> .config
+          echo "CONFIG_TARGET_mediatek_filogic_DEVICE_cmcc_rax3000m=y" >> .config
+          make defconfig
+
+          # 2. 强制注入必要的依赖 (解决 target/linux 报错)
+          echo "CONFIG_PACKAGE_kmod-mediatek_wed=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-nf-flow=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-ipt-offload=y" >> .config
+
+          # 3. 注入 TurboACC (开启分载以保护依赖不被剔除)
+          echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-turboacc_INCLUDE_OFFLOADING=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-turboacc_INCLUDE_BBR_CCA=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-turboacc_INCLUDE_FULLCONE_NAT=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-turboacc_INCLUDE_PDNSD=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-turboacc_INCLUDE_DNSFORWARDER=y" >> .config
+
+          # 4. 注入 SQM (与 TurboACC 共存)
+          echo "CONFIG_PACKAGE_luci-app-sqm=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-sched-cake=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-sched-fq_codel=y" >> .config
+          
+          # 5. 注入 Passwall (Rust版)
+          echo "CONFIG_PACKAGE_luci-app-passwall=y" >> .config
+          echo "CONFIG_PACKAGE_xray-core=y" >> .config
+          echo "CONFIG_PACKAGE_sing-box=y" >> .config
+          echo "CONFIG_PACKAGE_chinadns-ng=y" >> .config
+          echo "CONFIG_PACKAGE_shadowsocks-rust-sslocal=y" >> .config
+
+          # 6. 注入常用工具
+          echo "CONFIG_PACKAGE_luci-app-statistics=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-vnstat2=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-package-manager=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-diskman=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-samba4=y" >> .config
+          echo "CONFIG_PACKAGE_autosamba=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-nlbwmon=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-frpc=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-wol=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-ttyd=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
+          echo "CONFIG_PACKAGE_curl=y" >> .config
+          echo "CONFIG_PACKAGE_htop=y" >> .config
+          echo "CONFIG_PACKAGE_nano=y" >> .config
+
+          # 7. 应用配置并解决依赖
+          make defconfig
+
+      # 🔥🔥🔥【诊断】检查关键模块是否被选中 🔥🔥🔥
+      - name: 检查配置正确性
+        run: |
+          cd openwrt
+          echo "正在检查 kmod-nf-flow 状态..."
+          grep "CONFIG_PACKAGE_kmod-nf-flow" .config || true
+          
+          if grep -q "CONFIG_PACKAGE_kmod-nf-flow=y" .config; then
+            echo "✅ kmod-nf-flow 已成功开启！驱动编译应该没问题。"
+          else
+            echo "❌ 严重错误：kmod-nf-flow 未被开启！"
+            echo "这会导致 'HIT_BIND_FORCE_TO_CPU' 报错。"
+            echo "强制停止编译以节省时间..."
+            exit 1
+          fi
 
       - name: 修改 5G 25dB
         if: env.ENABLE_5G_25DB == 'true'
@@ -110,22 +172,21 @@ jobs:
             echo "ℹ️ 5G 25dB 已经修改过，无需重复操作"
           fi
 
-      # 🔥🔥🔥【刷新】修改 Key 为 reset-cache-v3 🔥🔥🔥
+      # 🔥🔥🔥【刷新】缓存 Key 更新为 dynamic-conf-v1 🔥🔥🔥
       - name: 缓存加速 (Cache)
         uses: actions/cache@v4
         with:
           path: |
             openwrt/dl
             openwrt/.ccache
-          key: ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-reset-cache-v3-${{ hashFiles('openwrt/.config') }}
+          key: ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-dynamic-conf-v1-${{ hashFiles('openwrt/.config') }}
           restore-keys: |
-            ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-reset-cache-v3-
+            ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-dynamic-conf-v1-
 
       - name: 下载软件包 (Download package)
         id: package
         run: |
           cd openwrt
-          make defconfig
           make download -j8
           find dl -size -1024c -exec ls -l {} \;
           find dl -size -1024c -exec rm -f {} \;
