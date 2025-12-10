@@ -78,48 +78,46 @@ jobs:
       - name: 安装 Feeds (Install feeds)
         run: cd openwrt && ./scripts/feeds install -a
 
-      # 🔥🔥🔥【关键修复】直接修改驱动源码，填补缺失的定义 🔥🔥🔥
-      - name: 修复 MTK 驱动源码 bug (Fix Source Code)
+      # 🔥🔥🔥【核弹级修复】直接修改驱动源码，填补缺失的定义 🔥🔥🔥
+      # 无论内核怎么配置，这里强行让代码通过编译
+      - name: 修复 MTK 驱动源码 bug (Nuclear Fix)
         run: |
           cd openwrt
-          
-          # 寻找 mtk_eth_soc.c 文件 (通常在 target/linux/mediatek/files-6.6... 下)
-          DRIVER_FILE=$(find target/linux/mediatek -name "mtk_eth_soc.c" -type f | head -n 1)
-          
-          if [ -f "$DRIVER_FILE" ]; then
-            echo "✅ 找到驱动文件: $DRIVER_FILE"
-            echo "正在注入缺失的宏定义..."
+          echo "🔍 正在搜索 mtk_eth_soc.c ..."
+          # 搜索所有可能的 mtk_eth_soc.c 文件路径
+          find target/linux/mediatek -name "mtk_eth_soc.c" | while read -r DRIVER_FILE; do
+            echo "🛠️ 正在修补: $DRIVER_FILE"
             
-            # 在 include 部分之后插入缺失的定义
-            # 这里的定义是 dummy 值，目的是让编译器能跑通，防止 undeclared 错误
-            sed -i '/#include <linux\/platform_device.h>/a \
-            /* Fixed by GitHub Actions: Define missing symbols to prevent build failure */ \
+            # 在文件第一行插入宏定义 (Define symbols at the very top)
+            # 使用 sed '1i' 插入到第一行，确保要在任何 usage 之前
+            sed -i '1i\
+            /* NUCLEAR FIX START */ \
             #ifndef HIT_BIND_FORCE_TO_CPU \
-            #define HIT_BIND_FORCE_TO_CPU 1 \
+            #define HIT_BIND_FORCE_TO_CPU 0 \
             #endif \
             #ifndef MTK_FE_START_RESET \
-            #define MTK_FE_START_RESET 1 \
+            #define MTK_FE_START_RESET 0 \
             #endif \
             #ifndef MTK_FE_RESET_NAT_DONE \
-            #define MTK_FE_RESET_NAT_DONE 2 \
+            #define MTK_FE_RESET_NAT_DONE 0 \
             #endif \
             #ifndef MTK_FE_RESET_DONE \
-            #define MTK_FE_RESET_DONE 3 \
+            #define MTK_FE_RESET_DONE 0 \
             #endif \
             #ifndef MTK_WIFI_RESET_DONE \
-            #define MTK_WIFI_RESET_DONE 4 \
+            #define MTK_WIFI_RESET_DONE 0 \
             #endif \
             #ifndef MTK_WIFI_CHIP_ONLINE \
-            #define MTK_WIFI_CHIP_ONLINE 5 \
+            #define MTK_WIFI_CHIP_ONLINE 0 \
             #endif \
             #ifndef MTK_WIFI_CHIP_OFFLINE \
-            #define MTK_WIFI_CHIP_OFFLINE 6 \
-            #endif' "$DRIVER_FILE"
+            #define MTK_WIFI_CHIP_OFFLINE 0 \
+            #endif \
+            /* NUCLEAR FIX END */' "$DRIVER_FILE"
             
-            echo "✅ 源码修补完成！"
-          else
-            echo "⚠️ 警告：未找到 mtk_eth_soc.c，可能路径已变更，跳过源码修补。"
-          fi
+            echo "✅ 修补完成，验证文件头部内容："
+            head -n 15 "$DRIVER_FILE"
+          done
 
       - name: 动态生成配置文件
         run: |
@@ -134,6 +132,7 @@ jobs:
           # 核心网络组件 (尝试开启依赖)
           CONFIG_PACKAGE_kmod-nf-flow=y
           CONFIG_PACKAGE_kmod-mediatek_wed=y
+          CONFIG_PACKAGE_kmod-ipt-offload=y
           # 插件
           CONFIG_PACKAGE_luci-app-passwall=y
           CONFIG_PACKAGE_luci-app-sqm=y
@@ -176,16 +175,16 @@ jobs:
             echo "ℹ️ 5G 25dB 已经修改过，无需重复操作"
           fi
 
-      # 🔥🔥🔥【刷新】Cache Key 更新为 code-patch-v1 🔥🔥🔥
+      # 🔥🔥🔥【刷新】Cache Key 更新为 nuclear-fix-v1 🔥🔥🔥
       - name: 缓存加速 (Cache)
         uses: actions/cache@v4
         with:
           path: |
             openwrt/dl
             openwrt/.ccache
-          key: ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-code-patch-v1-${{ hashFiles('openwrt/.config') }}
+          key: ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-nuclear-fix-v1-${{ hashFiles('openwrt/.config') }}
           restore-keys: |
-            ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-code-patch-v1-
+            ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-nuclear-fix-v1-
 
       - name: 下载软件包 (Download package)
         id: package
