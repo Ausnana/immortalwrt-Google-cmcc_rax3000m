@@ -78,20 +78,62 @@ jobs:
       - name: 安装 Feeds (Install feeds)
         run: cd openwrt && ./scripts/feeds install -a
 
-      # 🔥🔥🔥【核弹级修复】直接修改驱动源码，填补缺失的定义 🔥🔥🔥
-      # 无论内核怎么配置，这里强行让代码通过编译
-      - name: 修复 MTK 驱动源码 bug (Nuclear Fix)
+      # 🔥🔥🔥 1. 生成基础配置 🔥🔥🔥
+      - name: 动态生成配置文件
         run: |
           cd openwrt
-          echo "🔍 正在搜索 mtk_eth_soc.c ..."
-          # 搜索所有可能的 mtk_eth_soc.c 文件路径
-          find target/linux/mediatek -name "mtk_eth_soc.c" | while read -r DRIVER_FILE; do
-            echo "🛠️ 正在修补: $DRIVER_FILE"
-            
-            # 在文件第一行插入宏定义 (Define symbols at the very top)
-            # 使用 sed '1i' 插入到第一行，确保要在任何 usage 之前
-            sed -i '1i\
-            /* NUCLEAR FIX START */ \
+          # 写入种子配置
+          cat << EOF > .config
+          CONFIG_TARGET_mediatek=y
+          CONFIG_TARGET_mediatek_filogic=y
+          CONFIG_TARGET_mediatek_filogic_DEVICE_cmcc_rax3000m=y
+          CONFIG_PACKAGE_luci=y
+          CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
+          # 常用插件
+          CONFIG_PACKAGE_luci-app-passwall=y
+          CONFIG_PACKAGE_luci-app-sqm=y
+          CONFIG_PACKAGE_luci-app-turboacc=y
+          CONFIG_PACKAGE_luci-app-turboacc_INCLUDE_OFFLOADING=y
+          CONFIG_PACKAGE_luci-app-statistics=y
+          CONFIG_PACKAGE_luci-app-vnstat2=y
+          CONFIG_PACKAGE_luci-app-diskman=y
+          CONFIG_PACKAGE_luci-app-samba4=y
+          CONFIG_PACKAGE_autosamba=y
+          CONFIG_PACKAGE_luci-app-nlbwmon=y
+          CONFIG_PACKAGE_luci-app-frpc=y
+          CONFIG_PACKAGE_luci-app-wol=y
+          CONFIG_PACKAGE_luci-app-ttyd=y
+          CONFIG_PACKAGE_luci-app-upnp=y
+          EOF
+          
+          # 应用默认设置
+          make defconfig
+
+      # 🔥🔥🔥 2. 预下载并解压内核（关键步骤！） 🔥🔥🔥
+      # 必须先执行这步，源码文件才会出现在 build_dir 目录里
+      - name: 预解压内核源码 (Prepare Kernel Source)
+        run: |
+          cd openwrt
+          echo "正在下载软件包..."
+          make download -j8
+          
+          echo "正在强制解压内核源码（这可能需要几分钟）..."
+          # 这里会编译工具链并解压内核，确保 build_dir 里有文件
+          make target/linux/prepare -j$(nproc) V=s
+
+      # 🔥🔥🔥 3. 对已解压的源码进行外科手术式修复 🔥🔥🔥
+      - name: 修复 MTK 驱动源码 bug (Fix Unpacked Source)
+        run: |
+          cd openwrt
+          echo "🔍 正在 build_dir 中搜索 mtk_eth_soc.c ..."
+          
+          # 这次搜索的是 build_dir，因为上一步已经解压了
+          # 找到所有匹配的文件（可能有多个，全部修改）
+          find build_dir -name "mtk_eth_soc.c" -print0 | xargs -0 -I {} sh -c '
+            echo "🛠️ 正在修补: {}"
+            # 在文件第一行插入宏定义，伪造缺失的符号
+            sed -i "1i\
+            /* CI FIX START */ \
             #ifndef HIT_BIND_FORCE_TO_CPU \
             #define HIT_BIND_FORCE_TO_CPU 0 \
             #endif \
@@ -113,44 +155,10 @@ jobs:
             #ifndef MTK_WIFI_CHIP_OFFLINE \
             #define MTK_WIFI_CHIP_OFFLINE 0 \
             #endif \
-            /* NUCLEAR FIX END */' "$DRIVER_FILE"
-            
-            echo "✅ 修补完成，验证文件头部内容："
-            head -n 15 "$DRIVER_FILE"
-          done
-
-      - name: 动态生成配置文件
-        run: |
-          cd openwrt
-          # 1. 基础配置
-          cat << EOF > .config
-          CONFIG_TARGET_mediatek=y
-          CONFIG_TARGET_mediatek_filogic=y
-          CONFIG_TARGET_mediatek_filogic_DEVICE_cmcc_rax3000m=y
-          CONFIG_PACKAGE_luci=y
-          CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
-          # 核心网络组件 (尝试开启依赖)
-          CONFIG_PACKAGE_kmod-nf-flow=y
-          CONFIG_PACKAGE_kmod-mediatek_wed=y
-          CONFIG_PACKAGE_kmod-ipt-offload=y
-          # 插件
-          CONFIG_PACKAGE_luci-app-passwall=y
-          CONFIG_PACKAGE_luci-app-sqm=y
-          CONFIG_PACKAGE_luci-app-turboacc=y
-          CONFIG_PACKAGE_luci-app-turboacc_INCLUDE_OFFLOADING=y
-          CONFIG_PACKAGE_luci-app-statistics=y
-          CONFIG_PACKAGE_luci-app-vnstat2=y
-          CONFIG_PACKAGE_luci-app-diskman=y
-          CONFIG_PACKAGE_luci-app-samba4=y
-          CONFIG_PACKAGE_autosamba=y
-          CONFIG_PACKAGE_luci-app-nlbwmon=y
-          CONFIG_PACKAGE_luci-app-frpc=y
-          CONFIG_PACKAGE_luci-app-wol=y
-          CONFIG_PACKAGE_luci-app-ttyd=y
-          CONFIG_PACKAGE_luci-app-upnp=y
-          EOF
-          
-          make defconfig
+            /* CI FIX END */" "{}"
+            echo "✅ 头部验证:"
+            head -n 15 "{}"
+          '
 
       - name: 修改 5G 25dB
         if: env.ENABLE_5G_25DB == 'true'
@@ -165,7 +173,6 @@ jobs:
           fi
 
           EXPECTED_CONTENT=$(printf '\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B')
-          # 读取当前值
           CURRENT_CONTENT=$(dd if="$EEPROM_FILE" bs=1 skip=$((0x445)) count=20 2>/dev/null)
           
           if [ "$CURRENT_CONTENT" != "$EXPECTED_CONTENT" ]; then
@@ -175,24 +182,16 @@ jobs:
             echo "ℹ️ 5G 25dB 已经修改过，无需重复操作"
           fi
 
-      # 🔥🔥🔥【刷新】Cache Key 更新为 nuclear-fix-v1 🔥🔥🔥
+      # 🔥🔥🔥【刷新】Cache Key 更新为 final-success-v1 🔥🔥🔥
       - name: 缓存加速 (Cache)
         uses: actions/cache@v4
         with:
           path: |
             openwrt/dl
             openwrt/.ccache
-          key: ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-nuclear-fix-v1-${{ hashFiles('openwrt/.config') }}
+          key: ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-final-success-v1-${{ hashFiles('openwrt/.config') }}
           restore-keys: |
-            ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-nuclear-fix-v1-
-
-      - name: 下载软件包 (Download package)
-        id: package
-        run: |
-          cd openwrt
-          make download -j8
-          find dl -size -1024c -exec ls -l {} \;
-          find dl -size -1024c -exec rm -f {} \;
+            ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-final-success-v1-
 
       - name: 编译固件 (Compile the firmware)
         id: compile
@@ -203,6 +202,7 @@ jobs:
           export CCACHE_DIR=$(pwd)/.ccache
           
           echo -e "$(nproc) thread compile"
+          # 内核已被 prepare 步骤处理过，这里继续编译剩余部分
           make -j$(nproc) || make -j1 || make -j1 V=s
           echo "status=success" >> $GITHUB_OUTPUT
           
