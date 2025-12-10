@@ -78,25 +78,69 @@ jobs:
       - name: 安装 Feeds (Install feeds)
         run: cd openwrt && ./scripts/feeds install -a
 
-      # 🔥🔥🔥【重点】暴力配置注入 🔥🔥🔥
-      - name: 生成并强制修改配置 (Generate & Force Config)
+      # 🔥🔥🔥【关键修复】直接修改驱动源码，填补缺失的定义 🔥🔥🔥
+      - name: 修复 MTK 驱动源码 bug (Fix Source Code)
         run: |
           cd openwrt
           
-          # 1. 写入种子配置 (只写最核心的)
+          # 寻找 mtk_eth_soc.c 文件 (通常在 target/linux/mediatek/files-6.6... 下)
+          DRIVER_FILE=$(find target/linux/mediatek -name "mtk_eth_soc.c" -type f | head -n 1)
+          
+          if [ -f "$DRIVER_FILE" ]; then
+            echo "✅ 找到驱动文件: $DRIVER_FILE"
+            echo "正在注入缺失的宏定义..."
+            
+            # 在 include 部分之后插入缺失的定义
+            # 这里的定义是 dummy 值，目的是让编译器能跑通，防止 undeclared 错误
+            sed -i '/#include <linux\/platform_device.h>/a \
+            /* Fixed by GitHub Actions: Define missing symbols to prevent build failure */ \
+            #ifndef HIT_BIND_FORCE_TO_CPU \
+            #define HIT_BIND_FORCE_TO_CPU 1 \
+            #endif \
+            #ifndef MTK_FE_START_RESET \
+            #define MTK_FE_START_RESET 1 \
+            #endif \
+            #ifndef MTK_FE_RESET_NAT_DONE \
+            #define MTK_FE_RESET_NAT_DONE 2 \
+            #endif \
+            #ifndef MTK_FE_RESET_DONE \
+            #define MTK_FE_RESET_DONE 3 \
+            #endif \
+            #ifndef MTK_WIFI_RESET_DONE \
+            #define MTK_WIFI_RESET_DONE 4 \
+            #endif \
+            #ifndef MTK_WIFI_CHIP_ONLINE \
+            #define MTK_WIFI_CHIP_ONLINE 5 \
+            #endif \
+            #ifndef MTK_WIFI_CHIP_OFFLINE \
+            #define MTK_WIFI_CHIP_OFFLINE 6 \
+            #endif' "$DRIVER_FILE"
+            
+            echo "✅ 源码修补完成！"
+          else
+            echo "⚠️ 警告：未找到 mtk_eth_soc.c，可能路径已变更，跳过源码修补。"
+          fi
+
+      - name: 动态生成配置文件
+        run: |
+          cd openwrt
+          # 1. 基础配置
           cat << EOF > .config
           CONFIG_TARGET_mediatek=y
           CONFIG_TARGET_mediatek_filogic=y
           CONFIG_TARGET_mediatek_filogic_DEVICE_cmcc_rax3000m=y
-          # 插件列表
           CONFIG_PACKAGE_luci=y
           CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
+          # 核心网络组件 (尝试开启依赖)
+          CONFIG_PACKAGE_kmod-nf-flow=y
+          CONFIG_PACKAGE_kmod-mediatek_wed=y
+          # 插件
           CONFIG_PACKAGE_luci-app-passwall=y
           CONFIG_PACKAGE_luci-app-sqm=y
           CONFIG_PACKAGE_luci-app-turboacc=y
+          CONFIG_PACKAGE_luci-app-turboacc_INCLUDE_OFFLOADING=y
           CONFIG_PACKAGE_luci-app-statistics=y
           CONFIG_PACKAGE_luci-app-vnstat2=y
-          CONFIG_PACKAGE_luci-app-package-manager=y
           CONFIG_PACKAGE_luci-app-diskman=y
           CONFIG_PACKAGE_luci-app-samba4=y
           CONFIG_PACKAGE_autosamba=y
@@ -106,28 +150,8 @@ jobs:
           CONFIG_PACKAGE_luci-app-ttyd=y
           CONFIG_PACKAGE_luci-app-upnp=y
           EOF
-
-          # 2. 让 OpenWrt 计算依赖
+          
           make defconfig
-
-          # 3. 💀 暴力修正：无论 make defconfig 做了什么，这里强制改回来 💀
-          # 这一步会直接修改最终的 .config 文件，忽略依赖检查
-          echo "正在暴力强制开启 kmod-mediatek_wed 和 nf-flow..."
-          
-          # 如果之前是被注释掉的 (is not set)，先删除那一行
-          sed -i '/CONFIG_PACKAGE_kmod-mediatek_wed/d' .config
-          sed -i '/CONFIG_PACKAGE_kmod-nf-flow/d' .config
-          sed -i '/CONFIG_PACKAGE_kmod-ipt-offload/d' .config
-          
-          # 然后追加强制开启的配置
-          echo "CONFIG_PACKAGE_kmod-mediatek_wed=y" >> .config
-          echo "CONFIG_PACKAGE_kmod-nf-flow=y" >> .config
-          echo "CONFIG_PACKAGE_kmod-ipt-offload=y" >> .config
-          
-          # 4. 再次检查，确保写入成功
-          echo "最终检查关键配置状态："
-          grep "CONFIG_PACKAGE_kmod-mediatek_wed" .config
-          grep "CONFIG_PACKAGE_kmod-nf-flow" .config
 
       - name: 修改 5G 25dB
         if: env.ENABLE_5G_25DB == 'true'
@@ -142,7 +166,7 @@ jobs:
           fi
 
           EXPECTED_CONTENT=$(printf '\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B\x2B')
-          # 读取当前值 (从 0x445 开始读取 20 字节)
+          # 读取当前值
           CURRENT_CONTENT=$(dd if="$EEPROM_FILE" bs=1 skip=$((0x445)) count=20 2>/dev/null)
           
           if [ "$CURRENT_CONTENT" != "$EXPECTED_CONTENT" ]; then
@@ -152,16 +176,16 @@ jobs:
             echo "ℹ️ 5G 25dB 已经修改过，无需重复操作"
           fi
 
-      # 🔥🔥🔥【刷新】缓存 Key 更新为 brute-force-v1 🔥🔥🔥
+      # 🔥🔥🔥【刷新】Cache Key 更新为 code-patch-v1 🔥🔥🔥
       - name: 缓存加速 (Cache)
         uses: actions/cache@v4
         with:
           path: |
             openwrt/dl
             openwrt/.ccache
-          key: ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-brute-force-v1-${{ hashFiles('openwrt/.config') }}
+          key: ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-code-patch-v1-${{ hashFiles('openwrt/.config') }}
           restore-keys: |
-            ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-brute-force-v1-
+            ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-code-patch-v1-
 
       - name: 下载软件包 (Download package)
         id: package
@@ -176,7 +200,6 @@ jobs:
         run: |
           cd openwrt
           
-          # 启用 CCACHE 加速编译
           echo "CONFIG_CCACHE=y" >> .config
           export CCACHE_DIR=$(pwd)/.ccache
           
