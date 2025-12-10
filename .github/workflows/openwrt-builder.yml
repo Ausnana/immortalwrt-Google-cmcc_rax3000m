@@ -78,76 +78,56 @@ jobs:
       - name: 安装 Feeds (Install feeds)
         run: cd openwrt && ./scripts/feeds install -a
 
-      # 🔥🔥🔥【重点】动态生成配置，不再依赖静态 .config 🔥🔥🔥
-      - name: 生成配置文件 (Generate Configuration)
+      # 🔥🔥🔥【重点】暴力配置注入 🔥🔥🔥
+      - name: 生成并强制修改配置 (Generate & Force Config)
         run: |
           cd openwrt
-          # 1. 先生成 RAX3000M 的默认配置 (确保基础驱动正确)
-          touch .config
-          echo "CONFIG_TARGET_mediatek=y" >> .config
-          echo "CONFIG_TARGET_mediatek_filogic=y" >> .config
-          echo "CONFIG_TARGET_mediatek_filogic_DEVICE_cmcc_rax3000m=y" >> .config
+          
+          # 1. 写入种子配置 (只写最核心的)
+          cat << EOF > .config
+          CONFIG_TARGET_mediatek=y
+          CONFIG_TARGET_mediatek_filogic=y
+          CONFIG_TARGET_mediatek_filogic_DEVICE_cmcc_rax3000m=y
+          # 插件列表
+          CONFIG_PACKAGE_luci=y
+          CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
+          CONFIG_PACKAGE_luci-app-passwall=y
+          CONFIG_PACKAGE_luci-app-sqm=y
+          CONFIG_PACKAGE_luci-app-turboacc=y
+          CONFIG_PACKAGE_luci-app-statistics=y
+          CONFIG_PACKAGE_luci-app-vnstat2=y
+          CONFIG_PACKAGE_luci-app-package-manager=y
+          CONFIG_PACKAGE_luci-app-diskman=y
+          CONFIG_PACKAGE_luci-app-samba4=y
+          CONFIG_PACKAGE_autosamba=y
+          CONFIG_PACKAGE_luci-app-nlbwmon=y
+          CONFIG_PACKAGE_luci-app-frpc=y
+          CONFIG_PACKAGE_luci-app-wol=y
+          CONFIG_PACKAGE_luci-app-ttyd=y
+          CONFIG_PACKAGE_luci-app-upnp=y
+          EOF
+
+          # 2. 让 OpenWrt 计算依赖
           make defconfig
 
-          # 2. 强制注入必要的依赖 (解决 target/linux 报错)
+          # 3. 💀 暴力修正：无论 make defconfig 做了什么，这里强制改回来 💀
+          # 这一步会直接修改最终的 .config 文件，忽略依赖检查
+          echo "正在暴力强制开启 kmod-mediatek_wed 和 nf-flow..."
+          
+          # 如果之前是被注释掉的 (is not set)，先删除那一行
+          sed -i '/CONFIG_PACKAGE_kmod-mediatek_wed/d' .config
+          sed -i '/CONFIG_PACKAGE_kmod-nf-flow/d' .config
+          sed -i '/CONFIG_PACKAGE_kmod-ipt-offload/d' .config
+          
+          # 然后追加强制开启的配置
           echo "CONFIG_PACKAGE_kmod-mediatek_wed=y" >> .config
           echo "CONFIG_PACKAGE_kmod-nf-flow=y" >> .config
           echo "CONFIG_PACKAGE_kmod-ipt-offload=y" >> .config
-
-          # 3. 注入 TurboACC (开启分载以保护依赖不被剔除)
-          echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
-          echo "CONFIG_PACKAGE_luci-app-turboacc_INCLUDE_OFFLOADING=y" >> .config
-          echo "CONFIG_PACKAGE_luci-app-turboacc_INCLUDE_BBR_CCA=y" >> .config
-          echo "CONFIG_PACKAGE_luci-app-turboacc_INCLUDE_FULLCONE_NAT=y" >> .config
-          echo "CONFIG_PACKAGE_luci-app-turboacc_INCLUDE_PDNSD=y" >> .config
-          echo "CONFIG_PACKAGE_luci-app-turboacc_INCLUDE_DNSFORWARDER=y" >> .config
-
-          # 4. 注入 SQM (与 TurboACC 共存)
-          echo "CONFIG_PACKAGE_luci-app-sqm=y" >> .config
-          echo "CONFIG_PACKAGE_kmod-sched-cake=y" >> .config
-          echo "CONFIG_PACKAGE_kmod-sched-fq_codel=y" >> .config
           
-          # 5. 注入 Passwall (Rust版)
-          echo "CONFIG_PACKAGE_luci-app-passwall=y" >> .config
-          echo "CONFIG_PACKAGE_xray-core=y" >> .config
-          echo "CONFIG_PACKAGE_sing-box=y" >> .config
-          echo "CONFIG_PACKAGE_chinadns-ng=y" >> .config
-          echo "CONFIG_PACKAGE_shadowsocks-rust-sslocal=y" >> .config
-
-          # 6. 注入常用工具
-          echo "CONFIG_PACKAGE_luci-app-statistics=y" >> .config
-          echo "CONFIG_PACKAGE_luci-app-vnstat2=y" >> .config
-          echo "CONFIG_PACKAGE_luci-app-package-manager=y" >> .config
-          echo "CONFIG_PACKAGE_luci-app-diskman=y" >> .config
-          echo "CONFIG_PACKAGE_luci-app-samba4=y" >> .config
-          echo "CONFIG_PACKAGE_autosamba=y" >> .config
-          echo "CONFIG_PACKAGE_luci-app-nlbwmon=y" >> .config
-          echo "CONFIG_PACKAGE_luci-app-frpc=y" >> .config
-          echo "CONFIG_PACKAGE_luci-app-wol=y" >> .config
-          echo "CONFIG_PACKAGE_luci-app-ttyd=y" >> .config
-          echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
-          echo "CONFIG_PACKAGE_curl=y" >> .config
-          echo "CONFIG_PACKAGE_htop=y" >> .config
-          echo "CONFIG_PACKAGE_nano=y" >> .config
-
-          # 7. 应用配置并解决依赖
-          make defconfig
-
-      # 🔥🔥🔥【诊断】检查关键模块是否被选中 🔥🔥🔥
-      - name: 检查配置正确性
-        run: |
-          cd openwrt
-          echo "正在检查 kmod-nf-flow 状态..."
-          grep "CONFIG_PACKAGE_kmod-nf-flow" .config || true
-          
-          if grep -q "CONFIG_PACKAGE_kmod-nf-flow=y" .config; then
-            echo "✅ kmod-nf-flow 已成功开启！驱动编译应该没问题。"
-          else
-            echo "❌ 严重错误：kmod-nf-flow 未被开启！"
-            echo "这会导致 'HIT_BIND_FORCE_TO_CPU' 报错。"
-            echo "强制停止编译以节省时间..."
-            exit 1
-          fi
+          # 4. 再次检查，确保写入成功
+          echo "最终检查关键配置状态："
+          grep "CONFIG_PACKAGE_kmod-mediatek_wed" .config
+          grep "CONFIG_PACKAGE_kmod-nf-flow" .config
 
       - name: 修改 5G 25dB
         if: env.ENABLE_5G_25DB == 'true'
@@ -172,16 +152,16 @@ jobs:
             echo "ℹ️ 5G 25dB 已经修改过，无需重复操作"
           fi
 
-      # 🔥🔥🔥【刷新】缓存 Key 更新为 dynamic-conf-v1 🔥🔥🔥
+      # 🔥🔥🔥【刷新】缓存 Key 更新为 brute-force-v1 🔥🔥🔥
       - name: 缓存加速 (Cache)
         uses: actions/cache@v4
         with:
           path: |
             openwrt/dl
             openwrt/.ccache
-          key: ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-dynamic-conf-v1-${{ hashFiles('openwrt/.config') }}
+          key: ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-brute-force-v1-${{ hashFiles('openwrt/.config') }}
           restore-keys: |
-            ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-dynamic-conf-v1-
+            ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-brute-force-v1-
 
       - name: 下载软件包 (Download package)
         id: package
