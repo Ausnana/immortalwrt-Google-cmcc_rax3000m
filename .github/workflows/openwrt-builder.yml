@@ -109,54 +109,56 @@ jobs:
           # 应用默认设置
           make defconfig
 
-      # 🔥🔥🔥 2. 预下载并解压内核（关键步骤！） 🔥🔥🔥
-      # 必须先执行这步，源码文件才会出现在 build_dir 目录里
+      # 🔥🔥🔥 2. 预下载并解压内核（必须步骤） 🔥🔥🔥
       - name: 预解压内核源码 (Prepare Kernel Source)
         run: |
           cd openwrt
           echo "正在下载软件包..."
           make download -j8
           
-          echo "正在强制解压内核源码（这可能需要几分钟）..."
-          # 这里会编译工具链并解压内核，确保 build_dir 里有文件
+          echo "正在强制解压内核源码..."
           make target/linux/prepare -j$(nproc) V=s
 
-      # 🔥🔥🔥 3. 对已解压的源码进行外科手术式修复 🔥🔥🔥
-      - name: 修复 MTK 驱动源码 bug (Fix Unpacked Source)
+      # 🔥🔥🔥 3. 稳健的源码修复方式 (使用 cat 拼接，防止 sed 压行) 🔥🔥🔥
+      - name: 修复 MTK 驱动源码 bug (Solid Fix)
         run: |
           cd openwrt
+          
+          # 创建补丁头文件 (EOF 方式保证换行符绝对正确)
+          cat << 'EOF' > mtk_fix.h
+          /* CI FIX START */
+          #ifndef HIT_BIND_FORCE_TO_CPU
+          #define HIT_BIND_FORCE_TO_CPU 0
+          #endif
+          #ifndef MTK_FE_START_RESET
+          #define MTK_FE_START_RESET 0
+          #endif
+          #ifndef MTK_FE_RESET_NAT_DONE
+          #define MTK_FE_RESET_NAT_DONE 0
+          #endif
+          #ifndef MTK_FE_RESET_DONE
+          #define MTK_FE_RESET_DONE 0
+          #endif
+          #ifndef MTK_WIFI_RESET_DONE
+          #define MTK_WIFI_RESET_DONE 0
+          #endif
+          #ifndef MTK_WIFI_CHIP_ONLINE
+          #define MTK_WIFI_CHIP_ONLINE 0
+          #endif
+          #ifndef MTK_WIFI_CHIP_OFFLINE
+          #define MTK_WIFI_CHIP_OFFLINE 0
+          #endif
+          /* CI FIX END */
+          
+          EOF
+          
           echo "🔍 正在 build_dir 中搜索 mtk_eth_soc.c ..."
           
-          # 这次搜索的是 build_dir，因为上一步已经解压了
-          # 找到所有匹配的文件（可能有多个，全部修改）
+          # 找到所有匹配的文件，使用 cat 拼接
           find build_dir -name "mtk_eth_soc.c" -print0 | xargs -0 -I {} sh -c '
             echo "🛠️ 正在修补: {}"
-            # 在文件第一行插入宏定义，伪造缺失的符号
-            sed -i "1i\
-            /* CI FIX START */ \
-            #ifndef HIT_BIND_FORCE_TO_CPU \
-            #define HIT_BIND_FORCE_TO_CPU 0 \
-            #endif \
-            #ifndef MTK_FE_START_RESET \
-            #define MTK_FE_START_RESET 0 \
-            #endif \
-            #ifndef MTK_FE_RESET_NAT_DONE \
-            #define MTK_FE_RESET_NAT_DONE 0 \
-            #endif \
-            #ifndef MTK_FE_RESET_DONE \
-            #define MTK_FE_RESET_DONE 0 \
-            #endif \
-            #ifndef MTK_WIFI_RESET_DONE \
-            #define MTK_WIFI_RESET_DONE 0 \
-            #endif \
-            #ifndef MTK_WIFI_CHIP_ONLINE \
-            #define MTK_WIFI_CHIP_ONLINE 0 \
-            #endif \
-            #ifndef MTK_WIFI_CHIP_OFFLINE \
-            #define MTK_WIFI_CHIP_OFFLINE 0 \
-            #endif \
-            /* CI FIX END */" "{}"
-            echo "✅ 头部验证:"
+            cat mtk_fix.h "{}" > "{}.tmp" && mv "{}.tmp" "{}"
+            echo "✅ 头部验证 (确保是多行):"
             head -n 15 "{}"
           '
 
@@ -182,16 +184,16 @@ jobs:
             echo "ℹ️ 5G 25dB 已经修改过，无需重复操作"
           fi
 
-      # 🔥🔥🔥【刷新】Cache Key 更新为 final-success-v1 🔥🔥🔥
+      # 🔥🔥🔥【刷新】Cache Key 更新为 solid-fix-v1 🔥🔥🔥
       - name: 缓存加速 (Cache)
         uses: actions/cache@v4
         with:
           path: |
             openwrt/dl
             openwrt/.ccache
-          key: ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-final-success-v1-${{ hashFiles('openwrt/.config') }}
+          key: ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-solid-fix-v1-${{ hashFiles('openwrt/.config') }}
           restore-keys: |
-            ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-final-success-v1-
+            ${{ runner.os }}-openwrt-${{ env.REPO_BRANCH }}-solid-fix-v1-
 
       - name: 编译固件 (Compile the firmware)
         id: compile
